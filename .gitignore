@@ -1,0 +1,24 @@
+# Ambiente virtual
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# Configurações locais e credenciais (NUNCA ENVIAR PARA O GIT)
+.env
+
+# Dados locais de teste
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Cobertura de testes e IDEs
+.pytest_cache/
+.vscode/
+# Logs/artefatos de execução
+*.log
+.coverage
+htmlcov/
