@@ -10,7 +10,13 @@ from sqlalchemy.exc import IntegrityError
 from src.database.db_connector import DatabaseConnector
 from src.database.schemas import TB_CLIENTES, TB_VENDAS
 from src.extraction.s3_uploader import S3DataUploader, build_partition_key
-from src.pipeline.etl_process import DataETL, clean_data, prepare_records, read_raw_content
+from src.pipeline.etl_process import (
+    DataETL,
+    RawFileTooLargeError,
+    clean_data,
+    prepare_records,
+    read_raw_content,
+)
 
 
 class FakeS3Client:
@@ -26,7 +32,8 @@ class FakeS3Client:
         self.upload_extra_args.append(ExtraArgs)
 
     def get_object(self, Bucket, Key):
-        return {"Body": io.BytesIO(self.objects[Key])}
+        content = self.objects[Key]
+        return {"Body": io.BytesIO(content), "ContentLength": len(content)}
 
 
 @pytest.fixture
@@ -334,6 +341,77 @@ def test_process_and_load_retorna_false_para_arquivo_sem_coluna_obrigatoria(sqli
     s3_key = "raw/2026-10-03/clientes.json"
     etl = DataETL(
         s3_client=FakeS3Client({s3_key: b'[{"id_cliente": 1}]'}), bucket_name="b", db_connector=sqlite_connector
+    )
+
+    assert etl.process_and_load(s3_key, TB_CLIENTES) is False
+
+
+# --- Limite de tamanho do arquivo bruto ---
+
+
+class TrackingBody(io.BytesIO):
+    """Corpo de resposta que registra quantos bytes foram pedidos."""
+
+    def __init__(self, content: bytes):
+        super().__init__(content)
+        self.requested: list[int | None] = []
+
+    def read(self, size=-1):
+        self.requested.append(size)
+        return super().read(size)
+
+
+class SizedS3Client:
+    def __init__(self, body: TrackingBody, content_length: int | None):
+        self.body = body
+        self.content_length = content_length
+
+    def get_object(self, Bucket, Key):
+        response = {"Body": self.body}
+        if self.content_length is not None:
+            response["ContentLength"] = self.content_length
+        return response
+
+
+def _etl_with_limit(s3_client, max_bytes: int) -> DataETL:
+    return DataETL(s3_client=s3_client, bucket_name="b", db_connector=object(), max_raw_file_bytes=max_bytes)
+
+
+def test_extract_recusa_objeto_maior_que_o_limite_sem_baixar():
+    body = TrackingBody(b"id\n1\n")
+    etl = _etl_with_limit(SizedS3Client(body, content_length=500 * 1024 * 1024), max_bytes=100)
+
+    with pytest.raises(RawFileTooLargeError, match="MAX_RAW_FILE_MB"):
+        etl.extract("raw/2026-10-03/vendas.csv")
+
+    assert body.requested == []
+    assert body.closed
+
+
+def test_extract_limita_leitura_mesmo_sem_content_length():
+    body = TrackingBody(b"id\n" + b"1\n" * 100)
+    etl = _etl_with_limit(SizedS3Client(body, content_length=None), max_bytes=50)
+
+    with pytest.raises(RawFileTooLargeError):
+        etl.extract("raw/2026-10-03/vendas.csv")
+
+    assert body.requested == [51]
+
+
+def test_extract_aceita_objeto_no_limite():
+    content = b"id\n1\n"
+    etl = _etl_with_limit(SizedS3Client(TrackingBody(content), len(content)), max_bytes=len(content))
+
+    assert etl.extract("raw/2026-10-03/vendas.csv")["id"].tolist() == [1]
+
+
+def test_process_and_load_falha_para_arquivo_grande_demais(sqlite_connector):
+    s3_key = "raw/2026-10-03/clientes.json"
+    etl = DataETL(
+        s3_client=FakeS3Client({s3_key: b'[{"id_cliente": 1, "nome": "Ana"}]'}),
+        bucket_name="b",
+        db_connector=sqlite_connector,
+        max_raw_file_bytes=10,
     )
 
     assert etl.process_and_load(s3_key, TB_CLIENTES) is False

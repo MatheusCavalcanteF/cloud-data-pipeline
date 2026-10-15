@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+DEFAULT_MAX_RAW_FILE_MB = 100
 
 
 def setup_logging(level: int = logging.INFO) -> None:
@@ -56,3 +57,15 @@ def get_s3_client():
 
 def get_bucket_name() -> str:
     return get_required_env("S3_BUCKET_NAME")
+
+
+def get_max_raw_file_bytes() -> int:
+    """Limite de tamanho de um arquivo bruto lido do S3 (MAX_RAW_FILE_MB, em MiB)."""
+    raw_value = os.getenv("MAX_RAW_FILE_MB") or str(DEFAULT_MAX_RAW_FILE_MB)
+    try:
+        megabytes = int(raw_value)
+    except ValueError:
+        megabytes = 0
+    if megabytes <= 0:
+        raise EnvironmentError(f"MAX_RAW_FILE_MB deve ser um inteiro positivo (recebido: {raw_value!r}).")
+    return megabytes * 1024 * 1024

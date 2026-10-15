@@ -59,3 +59,23 @@ def test_apenas_uma_chave_gera_erro_claro(monkeypatch, present):
 
     with pytest.raises(EnvironmentError, match="juntas"):
         config.get_aws_static_credentials()
+
+
+def test_limite_de_arquivo_padrao_e_100_mb(monkeypatch):
+    monkeypatch.delenv("MAX_RAW_FILE_MB", raising=False)
+
+    assert config.get_max_raw_file_bytes() == 100 * 1024 * 1024
+
+
+def test_limite_de_arquivo_configuravel(monkeypatch):
+    monkeypatch.setenv("MAX_RAW_FILE_MB", "5")
+
+    assert config.get_max_raw_file_bytes() == 5 * 1024 * 1024
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "abc", "1.5"])
+def test_limite_de_arquivo_invalido_gera_erro(monkeypatch, value):
+    monkeypatch.setenv("MAX_RAW_FILE_MB", value)
+
+    with pytest.raises(EnvironmentError, match="MAX_RAW_FILE_MB"):
+        config.get_max_raw_file_bytes()
