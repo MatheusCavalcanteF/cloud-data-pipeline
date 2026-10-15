@@ -1,4 +1,5 @@
 import logging
+import os
 from collections.abc import Sequence
 
 from sqlalchemy import Table, create_engine, text
@@ -15,6 +16,31 @@ UPSERT_DIALECTS = {
     "sqlite": sqlite_insert,  # usado nos testes
 }
 
+DEFAULT_SSLMODE = "prefer"
+VALID_SSLMODES = ("disable", "allow", "prefer", "require", "verify-ca", "verify-full")
+
+
+def get_sslmode() -> str:
+    """Lê DB_SSLMODE (libpq). 'prefer' serve o Docker local; banco remoto pede 'verify-full'."""
+    sslmode = os.getenv("DB_SSLMODE") or DEFAULT_SSLMODE
+    if sslmode not in VALID_SSLMODES:
+        raise EnvironmentError(f"DB_SSLMODE inválido: {sslmode!r}. Use um de: {', '.join(VALID_SSLMODES)}.")
+    return sslmode
+
+
+def build_db_url() -> URL:
+    """Monta a URL do PostgreSQL a partir do .env."""
+    # URL.create escapa caracteres especiais da senha (ex: '@', ':', '/')
+    return URL.create(
+        drivername="postgresql+psycopg2",
+        username=get_required_env("DB_USER"),
+        password=get_required_env("DB_PASSWORD"),
+        host=get_required_env("DB_HOST"),
+        port=int(get_required_env("DB_PORT")),
+        database=get_required_env("DB_NAME"),
+        query={"sslmode": get_sslmode()},
+    )
+
 
 class DatabaseConnector:
     def __init__(self, engine: Engine | None = None):
@@ -22,15 +48,7 @@ class DatabaseConnector:
 
     def _get_engine(self) -> Engine:
         """Cria a engine do SQLAlchemy para o PostgreSQL a partir do .env."""
-        # URL.create escapa caracteres especiais da senha (ex: '@', ':', '/')
-        db_url = URL.create(
-            drivername="postgresql+psycopg2",
-            username=get_required_env("DB_USER"),
-            password=get_required_env("DB_PASSWORD"),
-            host=get_required_env("DB_HOST"),
-            port=int(get_required_env("DB_PORT")),
-            database=get_required_env("DB_NAME"),
-        )
+        db_url = build_db_url()
         try:
             # hide_parameters: erros do SQLAlchemy não incluem os valores das linhas (nomes, e-mails)
             engine = create_engine(db_url, pool_pre_ping=True, hide_parameters=True)
