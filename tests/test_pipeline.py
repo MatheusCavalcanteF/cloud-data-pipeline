@@ -18,9 +18,11 @@ class FakeS3Client:
     def __init__(self, objects: dict[str, bytes] | None = None):
         self.objects = objects or {}
         self.uploaded: list[tuple[str, str, str]] = []
+        self.upload_extra_args: list[dict | None] = []
 
-    def upload_file(self, local_path, bucket, key):
+    def upload_file(self, local_path, bucket, key, ExtraArgs=None):
         self.uploaded.append((local_path, bucket, key))
+        self.upload_extra_args.append(ExtraArgs)
 
     def get_object(self, Bucket, Key):
         return {"Body": io.BytesIO(self.objects[Key])}
@@ -175,6 +177,15 @@ def test_upload_raw_folder_sem_data_usa_data_utc_atual(tmp_path, monkeypatch):
     keys = S3DataUploader(s3_client=FakeS3Client(), bucket_name="bucket").upload_raw_folder(str(tmp_path))
 
     assert keys == ["raw/2030-01-31/vendas.csv"]
+
+
+def test_upload_pede_criptografia_sse_s3(tmp_path):
+    (tmp_path / "vendas.csv").write_text("id_venda\n1\n")
+    s3 = FakeS3Client()
+
+    S3DataUploader(s3_client=s3, bucket_name="bucket").upload_raw_folder(str(tmp_path))
+
+    assert s3.upload_extra_args == [{"ServerSideEncryption": "AES256"}]
 
 
 # --- Deduplicação por chave primária ---
