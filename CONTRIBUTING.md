@@ -9,7 +9,7 @@ Arquitetura dividida em:
 
 ## Comandos Principais
 - Ativar ambiente virtual: `.\venv\Scripts\activate`
-- Instalar dependências: `pip install -r requirements.txt`
+- Instalar dependências (app + testes): `pip install -r requirements-dev.txt`
 - Subir container do PostgreSQL: `docker compose up -d`
 - Parar container do PostgreSQL: `docker compose down`
 - Executar testes unitários: `pytest`
