@@ -5,6 +5,7 @@ from decimal import Decimal
 import pandas as pd
 import pytest
 from sqlalchemy import BigInteger, Date, Integer, Numeric, create_engine, inspect, select
+from sqlalchemy.exc import IntegrityError
 
 from src.database.db_connector import DatabaseConnector
 from src.database.schemas import TB_CLIENTES, TB_VENDAS
@@ -265,8 +266,11 @@ def test_prepare_records_converte_tipos_e_ignora_colunas_extras():
 def test_prepare_records_data_invalida_lanca_erro():
     df = _vendas_df([{"id_venda": 1, "id_cliente": 10, "valor": 1.0, "data_venda": "nao-e-data"}])
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="data_venda") as exc_info:
         prepare_records(df, TB_VENDAS)
+
+    # a mensagem vai para o log: cita a coluna, não o valor da célula
+    assert "nao-e-data" not in str(exc_info.value)
 
 
 def test_load_cria_tabela_com_tipos_do_schema(sqlite_connector):
@@ -333,6 +337,34 @@ def test_process_and_load_retorna_false_para_arquivo_sem_coluna_obrigatoria(sqli
     )
 
     assert etl.process_and_load(s3_key, TB_CLIENTES) is False
+
+
+def test_engine_postgres_esconde_parametros_nos_erros(monkeypatch):
+    for name, value in {"DB_USER": "u", "DB_PASSWORD": "p", "DB_HOST": "localhost",
+                        "DB_PORT": "5432", "DB_NAME": "db"}.items():
+        monkeypatch.setenv(name, value)
+
+    engine = DatabaseConnector().engine
+
+    assert engine.hide_parameters is True
+
+
+def test_erro_de_banco_nao_leva_valores_das_linhas_para_o_log(sqlite_connector, monkeypatch, caplog):
+    s3_key = "raw/2026-10-03/clientes.json"
+    raw_json = b'[{"id_cliente": 1, "nome": "Ana", "email": "ana@example.com", "cidade": "Recife"}]'
+    etl = DataETL(s3_client=FakeS3Client({s3_key: raw_json}), bucket_name="b", db_connector=sqlite_connector)
+
+    def failing_upsert(table, records):
+        driver_error = Exception("DETAIL: Key (email)=(ana@example.com) already exists.")
+        driver_error.pgcode = "23505"
+        raise IntegrityError("INSERT INTO tb_clientes ...", records, driver_error)
+
+    monkeypatch.setattr(sqlite_connector, "upsert", failing_upsert)
+
+    assert etl.process_and_load(s3_key, TB_CLIENTES) is False
+    assert "IntegrityError (SQLSTATE 23505)" in caplog.text
+    assert "ana@example.com" not in caplog.text
+    assert "Ana" not in caplog.text
 
 
 @pytest.mark.parametrize("table", [TB_VENDAS, TB_CLIENTES])

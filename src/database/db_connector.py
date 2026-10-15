@@ -32,7 +32,8 @@ class DatabaseConnector:
             database=get_required_env("DB_NAME"),
         )
         try:
-            engine = create_engine(db_url, pool_pre_ping=True)
+            # hide_parameters: erros do SQLAlchemy não incluem os valores das linhas (nomes, e-mails)
+            engine = create_engine(db_url, pool_pre_ping=True, hide_parameters=True)
             logger.info("Engine SQLAlchemy criada com sucesso.")
             return engine
         except Exception as e:
