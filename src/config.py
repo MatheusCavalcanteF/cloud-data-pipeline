@@ -22,13 +22,35 @@ def get_required_env(name: str) -> str:
     return value
 
 
+def get_aws_static_credentials() -> dict:
+    """Lê chaves AWS estáticas do ambiente, se houver.
+
+    Sem nenhuma das duas, retorna {} e o boto3 usa a cadeia padrão
+    (AWS_PROFILE/~/.aws, SSO, role de instância/container). Só uma das duas
+    é configuração quebrada e gera erro explícito.
+    """
+    access_key = os.getenv("AWS_ACCESS_KEY_ID")
+    secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    if not access_key and not secret_key:
+        return {}
+    if not (access_key and secret_key):
+        raise EnvironmentError(
+            "Defina AWS_ACCESS_KEY_ID e AWS_SECRET_ACCESS_KEY juntas, ou deixe as duas vazias "
+            "para usar a cadeia padrão de credenciais do boto3 (perfil, SSO, role)."
+        )
+    credentials = {"aws_access_key_id": access_key, "aws_secret_access_key": secret_key}
+    session_token = os.getenv("AWS_SESSION_TOKEN")
+    if session_token:
+        credentials["aws_session_token"] = session_token
+    return credentials
+
+
 def get_s3_client():
-    """Cria um cliente boto3 S3 a partir das variáveis de ambiente."""
+    """Cria um cliente boto3 S3 (chaves do .env, se houver; senão a cadeia padrão)."""
     return boto3.client(
         "s3",
-        aws_access_key_id=get_required_env("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=get_required_env("AWS_SECRET_ACCESS_KEY"),
         region_name=os.getenv("AWS_REGION", "us-east-1"),
+        **get_aws_static_credentials(),
     )
 
 
