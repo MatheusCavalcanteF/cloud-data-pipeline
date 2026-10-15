@@ -98,12 +98,28 @@ def prepare_records(df: pd.DataFrame, table: Table) -> list[dict]:
     for name in columns:
         if isinstance(table.columns[name].type, Date):
             # errors="raise": data inválida falha a carga em vez de virar nulo silenciosamente
-            df_aligned[name] = pd.to_datetime(df_aligned[name], errors="raise").dt.date
+            try:
+                df_aligned[name] = pd.to_datetime(df_aligned[name], errors="raise").dt.date
+            except (ValueError, TypeError):
+                # A mensagem do pandas cita o valor da célula; o erro leva só a coluna
+                raise ValueError(f"Coluna '{name}' contém data inválida.") from None
 
     return [
         {name: _to_db_value(value) for name, value in row.items()}
         for row in df_aligned.astype(object).to_dict("records")
     ]
+
+
+def describe_db_error(error: SQLAlchemyError) -> str:
+    """Resume um erro de banco sem a mensagem do driver.
+
+    A mensagem do PostgreSQL pode citar valores das linhas
+    (ex: DETAIL: Key (email)=(...) already exists), então o log leva só a
+    classe do erro e o SQLSTATE.
+    """
+    sqlstate = getattr(getattr(error, "orig", None), "pgcode", None)
+    name = type(error).__name__
+    return f"{name} (SQLSTATE {sqlstate})" if sqlstate else name
 
 
 def read_raw_content(content: bytes, s3_key: str) -> pd.DataFrame:
@@ -154,7 +170,7 @@ class DataETL:
         except (BotoCoreError, ClientError) as e:
             logger.error(f"Erro de S3 ao processar {s3_key}: {e}")
         except SQLAlchemyError as e:
-            logger.error(f"Erro de banco ao carregar {s3_key} em '{table.name}': {e}")
+            logger.error(f"Erro de banco ao carregar {s3_key} em '{table.name}': {describe_db_error(e)}")
         except (ValueError, KeyError) as e:
             logger.error(f"Dados inválidos em {s3_key}: {e}")
         return False
