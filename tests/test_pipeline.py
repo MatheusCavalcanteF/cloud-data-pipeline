@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import BigInteger, Date, Integer, Numeric, create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 
-from src.database.db_connector import DatabaseConnector
+from src.database.db_connector import DatabaseConnector, build_db_url
 from src.database.schemas import TB_CLIENTES, TB_VENDAS
 from src.extraction.s3_uploader import S3DataUploader, build_partition_key
 from src.pipeline.etl_process import (
@@ -417,11 +417,35 @@ def test_process_and_load_falha_para_arquivo_grande_demais(sqlite_connector):
     assert etl.process_and_load(s3_key, TB_CLIENTES) is False
 
 
-def test_engine_postgres_esconde_parametros_nos_erros(monkeypatch):
-    for name, value in {"DB_USER": "u", "DB_PASSWORD": "p", "DB_HOST": "localhost",
+@pytest.fixture
+def db_env(monkeypatch):
+    for name, value in {"DB_USER": "u", "DB_PASSWORD": "p@ss:w/rd", "DB_HOST": "db.example.com",
                         "DB_PORT": "5432", "DB_NAME": "db"}.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.delenv("DB_SSLMODE", raising=False)
 
+
+def test_db_url_usa_sslmode_prefer_por_padrao(db_env):
+    url = build_db_url()
+
+    assert url.query["sslmode"] == "prefer"
+    assert url.password == "p@ss:w/rd"
+
+
+def test_db_url_repassa_sslmode_configurado(db_env, monkeypatch):
+    monkeypatch.setenv("DB_SSLMODE", "verify-full")
+
+    assert build_db_url().query["sslmode"] == "verify-full"
+
+
+def test_db_sslmode_invalido_gera_erro(db_env, monkeypatch):
+    monkeypatch.setenv("DB_SSLMODE", "sim")
+
+    with pytest.raises(EnvironmentError, match="DB_SSLMODE"):
+        build_db_url()
+
+
+def test_engine_postgres_esconde_parametros_nos_erros(db_env):
     engine = DatabaseConnector().engine
 
     assert engine.hide_parameters is True
