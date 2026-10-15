@@ -7,11 +7,15 @@ from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy import Date, Table
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.config import get_bucket_name, get_s3_client, setup_logging
+from src.config import get_bucket_name, get_max_raw_file_bytes, get_s3_client, setup_logging
 from src.database.db_connector import DatabaseConnector
 from src.database.schemas import TB_VENDAS, primary_key_columns, required_columns
 
 logger = logging.getLogger(__name__)
+
+
+class RawFileTooLargeError(ValueError):
+    """Objeto do S3 maior que o limite configurado em MAX_RAW_FILE_MB."""
 
 
 def _strip_value(value):
@@ -133,10 +137,17 @@ def read_raw_content(content: bytes, s3_key: str) -> pd.DataFrame:
 
 
 class DataETL:
-    def __init__(self, s3_client=None, bucket_name: str | None = None, db_connector=None):
+    def __init__(
+        self,
+        s3_client=None,
+        bucket_name: str | None = None,
+        db_connector=None,
+        max_raw_file_bytes: int | None = None,
+    ):
         self.bucket_name = bucket_name or get_bucket_name()
         self.s3_client = s3_client or get_s3_client()
         self.db_connector = db_connector or DatabaseConnector()
+        self.max_raw_file_bytes = max_raw_file_bytes or get_max_raw_file_bytes()
 
     def clean_data(
         self,
@@ -150,7 +161,22 @@ class DataETL:
         """Baixa o arquivo bruto do S3 e retorna como DataFrame."""
         logger.info(f"Lendo s3://{self.bucket_name}/{s3_key}...")
         response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
-        return read_raw_content(response["Body"].read(), s3_key)
+        body = response["Body"]
+        limit = self.max_raw_file_bytes
+        try:
+            # Recusa antes de baixar quando o S3 já informa o tamanho
+            content_length = response.get("ContentLength")
+            if content_length is not None and content_length > limit:
+                raise RawFileTooLargeError(
+                    f"{s3_key} tem {content_length} bytes; limite é {limit} (MAX_RAW_FILE_MB)."
+                )
+            # Lê no máximo limite + 1 byte: protege mesmo sem ContentLength confiável
+            content = body.read(limit + 1)
+            if len(content) > limit:
+                raise RawFileTooLargeError(f"{s3_key} excede o limite de {limit} bytes (MAX_RAW_FILE_MB).")
+        finally:
+            body.close()
+        return read_raw_content(content, s3_key)
 
     def load(self, df: pd.DataFrame, table: Table) -> int:
         """Anexa/atualiza os dados na tabela via upsert, respeitando o schema."""
