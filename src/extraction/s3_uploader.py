@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = (".csv", ".json")
 RAW_PREFIX = "raw"
+# SSE-S3: o objeto fica criptografado em repouso mesmo se a criptografia padrão do bucket mudar
+UPLOAD_EXTRA_ARGS = {"ServerSideEncryption": "AES256"}
 
 
 def current_partition_date() -> date:
@@ -30,7 +32,7 @@ class S3DataUploader:
     def upload_file(self, local_path: str, s3_key: str) -> bool:
         """Envia um arquivo local para o bucket S3."""
         try:
-            self.s3_client.upload_file(local_path, self.bucket_name, s3_key)
+            self.s3_client.upload_file(local_path, self.bucket_name, s3_key, ExtraArgs=UPLOAD_EXTRA_ARGS)
             logger.info(f"Upload concluído: {local_path} -> s3://{self.bucket_name}/{s3_key}")
             return True
         except (BotoCoreError, ClientError, OSError) as e:
